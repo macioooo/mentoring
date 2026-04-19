@@ -1,18 +1,22 @@
 package sii.ecommerce.project.order.internal.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import sii.ecommerce.project.order.api.dto.CreateOrderCommand;
+import sii.ecommerce.project.order.api.dto.OrderItemDto;
 import sii.ecommerce.project.order.api.events.OrderCreatedEvent;
+import sii.ecommerce.project.order.api.events.OrderItemPayload;
 import sii.ecommerce.project.order.internal.client.ProductCatalogClient;
 import sii.ecommerce.project.order.internal.model.Order;
 import sii.ecommerce.project.order.internal.model.OutboxMessage;
 import sii.ecommerce.project.order.internal.repository.OrderRepository;
 import sii.ecommerce.project.order.internal.repository.OutboxRepository;
 
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -31,29 +35,36 @@ public class OrderService {
 
         Order order = new Order(command.clientId());
 
-
-        for (var item : command.items()) {
-            var productInfo = productCatalogClient.fetchProductDetails(item.productId());
+        for (OrderItemDto item : command.items()) {
+            ProductCatalogClient.ProductSnapshot productInfo = productCatalogClient.fetchProductDetails(item.productId());
             order.addItem(item.productId(), productInfo.name(), productInfo.price(), item.quantity());
         }
 
         orderRepository.save(order);
 
-        try {
-            var event = new OrderCreatedEvent(order.getId(), order.getClientId(), order.getTotalAmount());
-            OutboxMessage outboxMessage = OutboxMessage.builder()
-                    .aggregateType("ORDER")
-                    .aggregateId(order.getId().toString())
-                    .eventType("OrderCreated")
-                    .payload(objectMapper.writeValueAsString(event))
-                    .build();
+        List<OrderItemPayload> eventItems = order.getItems().stream()
+                .map(item -> new OrderItemPayload(item.getProductId(), item.getQuantity(), item.getSnapshotPrice()))
+                .toList();
 
-            outboxRepository.save(outboxMessage);
-            log.info("Saved the order {} and Outbox event", order.getId());
-        } catch (Exception e) {
+        OrderCreatedEvent event = new OrderCreatedEvent(order.getId(), order.getClientId(), order.getTotalAmount(), eventItems);
+
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException e) {
             log.error("Error while event serialization for order {}", order.getId(), e);
             throw new RuntimeException("System error while processing the order", e);
         }
+
+        OutboxMessage outboxMessage = OutboxMessage.builder()
+                .aggregateType("ORDER")
+                .aggregateId(order.getId().toString())
+                .eventType("OrderCreated")
+                .payload(payload)
+                .build();
+
+        outboxRepository.save(outboxMessage);
+        log.info("Saved the order {} and Outbox event", order.getId());
 
         return order.getId();
     }

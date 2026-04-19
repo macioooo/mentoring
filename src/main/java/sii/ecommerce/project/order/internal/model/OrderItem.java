@@ -13,7 +13,7 @@ import java.util.UUID;
 @Table(name = "order_items")
 @Getter
 @NoArgsConstructor
-class OrderItem {
+public class OrderItem {
 
     @Id
     private UUID id = UUID.randomUUID();
